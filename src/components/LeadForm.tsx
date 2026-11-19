@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { CountryCode } from "libphonenumber-js";
 import { checkPhone } from "@/lib/phone";
+import { salesforgeTracking } from "@/lib/salesforge/tracking";
 import { Check } from "./icons";
 import { DEFAULT_COUNTRY, PhoneField } from "./PhoneField";
 
@@ -134,7 +135,8 @@ export function LeadForm({ kind }: { kind: "contact" | "demo" }) {
       const res = await fetch("/api/contact", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, kind, startedAt: startedAt.current }),
+        // tracking: the page this form is on and the visit's landing UTM values, passed on to Salesforge.
+        body: JSON.stringify({ ...data, kind, startedAt: startedAt.current, tracking: salesforgeTracking() }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {

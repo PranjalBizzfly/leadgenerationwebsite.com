@@ -14,13 +14,31 @@ const children = [];
 let hook;
 let ipSeq = 0;
 
-/** Stub webhook: "[fail]" in the message answers 500, "[slow]" never answers in time, anything else 200. */
+/** Leads received on the stub's /salesforge path (the Salesforge inbound listener stand-in). */
+const salesforgeLeads = [];
+
+/** Resolves once a Salesforge lead whose notes contain `marker` has arrived (sent in the background). */
+async function waitForSalesforgeLead(marker, ms = 8_000) {
+  for (let t = 0; t < ms; t += 100) {
+    const lead = salesforgeLeads.find((l) => l.body.notes?.includes(marker));
+    if (lead) return lead;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`no Salesforge lead with "${marker}" arrived`);
+}
+
+/** Stub webhook: "[fail]" in the message answers 500, "[slow]" never answers in time, anything else 200.
+ *  Its /salesforge path records leads and answers 201, or 500 when the lead contains "[sf-fail]". */
 function startHook() {
   return new Promise((resolve) => {
     hook = createServer((req, res) => {
       let data = "";
       req.on("data", (c) => (data += c));
       req.on("end", () => {
+        if (req.url === "/salesforge") {
+          salesforgeLeads.push({ headers: req.headers, body: JSON.parse(data) });
+          return res.writeHead(data.includes("[sf-fail]") ? 500 : 201).end("{}");
+        }
         if (data.includes("[fail]")) return res.writeHead(500).end();
         if (data.includes("[slow]")) return setTimeout(() => res.writeHead(200).end(), 3_000);
         res.writeHead(200).end();
@@ -78,8 +96,14 @@ async function expectError(res, status, code) {
 before(async () => {
   await startHook();
   await Promise.all([
-    startApp(PORT, { CONTACT_WEBHOOK_URL: `http://localhost:${HOOK_PORT}/`, CONTACT_WEBHOOK_TIMEOUT_MS: "1000" }),
-    startApp(NO_HOOK_PORT, { CONTACT_WEBHOOK_URL: "" }),
+    startApp(PORT, {
+      CONTACT_WEBHOOK_URL: `http://localhost:${HOOK_PORT}/`,
+      CONTACT_WEBHOOK_TIMEOUT_MS: "1000",
+      SALESFORGE_INBOUND_URL: `http://localhost:${HOOK_PORT}/salesforge`,
+      SALESFORGE_INBOUND_SECRET: "",
+      SALESFORGE_INBOUND_TOKEN: "",
+    }),
+    startApp(NO_HOOK_PORT, { CONTACT_WEBHOOK_URL: "", SALESFORGE_INBOUND_URL: "" }),
   ]);
 });
 
@@ -168,6 +192,37 @@ describe("POST /api/contact", () => {
       const res = await fetch(`${BASE}/api/contact`, { method });
       assert.equal(res.status, 405, method);
     }
+  });
+});
+
+describe("Salesforge delivery", () => {
+  test("each form's submit sends one standard-format lead to Salesforge in the background", async () => {
+    for (const [kind, formId, extra] of [
+      ["contact", "contact", { topic: "Partnerships" }],
+      ["demo", "request-access", { source: "LinkedIn" }],
+    ]) {
+      const marker = `sf-${formId}-${Date.now()}`;
+      const res = await post(valid({ kind, message: `Please get in touch ${marker}`, ...extra, tracking: { page: { url: "https://site.test/p", title: "P" }, utm: { source: "google" } } }));
+      assert.equal(res.status, 200);
+      const lead = await waitForSalesforgeLead(marker);
+      assert.equal(lead.body.form.id, formId);
+      assert.equal(lead.body.name, "Test Person");
+      assert.equal(lead.body.phone, "+919876543210");
+      assert.equal(lead.body.email, "test@example.com");
+      assert.equal(lead.body.company, "Example Co");
+      assert.deepEqual(lead.body.utm, { source: "google" });
+      assert.equal(lead.headers["webhook-id"], `lead_${lead.body.external_id}`);
+      if (formId === "request-access") assert.equal(lead.body.product, "LinkedIn");
+      else assert.equal(lead.body.topic, "Partnerships");
+    }
+  });
+
+  test("Salesforge failing does not break the form submit, and the send is still attempted", async () => {
+    const marker = `sf-down-${Date.now()}`;
+    const res = await post(valid({ message: `Please get in touch [sf-fail] ${marker}` }));
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).success, true);
+    await waitForSalesforgeLead(marker);
   });
 });
 

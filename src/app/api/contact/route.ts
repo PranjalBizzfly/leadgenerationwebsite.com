@@ -1,5 +1,10 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { checkPhone } from "@/lib/phone";
+import { sendLeadToSalesforge, type LeadContext } from "@/lib/salesforge/sender";
+import { getSalesforgeSettings } from "@/lib/salesforge/settings";
+
+/** Covers the Salesforge send that runs after the response: 4 tries × 10 s plus 36 s of retry waits. */
+export const maxDuration = 90;
 
 const MAX = { name: 120, email: 200, company: 160, message: 4000 };
 const MAX_BODY_BYTES = 20_000;
@@ -94,6 +99,7 @@ export async function POST(request: Request) {
   if (Object.keys(errors).length) return fail(requestId, 422, "VALIDATION_ERROR", "Please fix the highlighted fields.", errors);
 
   const webhook = process.env.CONTACT_WEBHOOK_URL;
+  const salesforgeConfigured = Boolean(getSalesforgeSettings().listeners.default.url);
   if (webhook) {
     try {
       const res = await fetch(webhook, {
@@ -110,12 +116,19 @@ export async function POST(request: Request) {
       }
       return fail(requestId, 502, "UPSTREAM_ERROR", "We couldn’t submit your message right now. Please try again shortly.");
     }
-  } else if (process.env.NODE_ENV === "production") {
-    console.error(`[contact] ${requestId} CONTACT_WEBHOOK_URL is not set; submission not delivered`);
+  } else if (process.env.NODE_ENV === "production" && !salesforgeConfigured) {
+    console.error(`[contact] ${requestId} neither CONTACT_WEBHOOK_URL nor SALESFORGE_INBOUND_URL is set; submission not delivered`);
     return fail(requestId, 503, "SERVICE_UNAVAILABLE", "Our form isn’t accepting messages right now. Please try again later.");
-  } else {
-    console.info(`[contact] ${requestId} submission (set CONTACT_WEBHOOK_URL to forward):`, submission);
+  } else if (!salesforgeConfigured) {
+    console.info(`[contact] ${requestId} submission (set SALESFORGE_INBOUND_URL or CONTACT_WEBHOOK_URL to forward):`, submission);
   }
+
+  // Salesforge: sent after the response, so the visitor never waits on it. The sender never throws, retries
+  // temporary failures and logs any lead it could not deliver in full (see src/lib/salesforge/sender.ts).
+  const tracking = (body.tracking && typeof body.tracking === "object" ? body.tracking : {}) as LeadContext;
+  const formId = submission.kind === "demo" ? "request-access" : "contact";
+  const fields = { name: submission.name, email: submission.email, phone: submission.phone, company: submission.company, message: submission.message, [formId === "request-access" ? "source" : "topic"]: submission.topic };
+  after(() => sendLeadToSalesforge(formId, fields, { page: tracking.page, utm: tracking.utm }));
 
   return ok(requestId);
 }

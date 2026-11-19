@@ -7,6 +7,7 @@ import { Footer } from "@/components/Footer";
 import { Header } from "@/components/Header";
 import { Motion } from "@/components/Motion";
 import { JsonLd } from "@/components/JsonLd";
+import { SalesforgeTracking } from "@/components/SalesforgeTracking";
 import { themeScript } from "@/components/ThemeToggle";
 import { SITE } from "@/lib/site";
 import "./globals.css";
@@ -44,6 +45,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <StickyCta />
         <Motion />
         <Analytics />
+        <SalesforgeTracking />
         <JsonLd data={{ "@context": "https://schema.org", "@type": "Organization", name: SITE.name, url: SITE.url, description: SITE.description }} />
       </body>
     </html>

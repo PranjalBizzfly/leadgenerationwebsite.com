@@ -12,6 +12,8 @@
     "qa": "node scripts/qa-crawl.mts http://localhost:3000",
     "check:links": "node scripts/link-check.mjs",
     "test:api": "node --test scripts/api.test.mjs",
+    "test:salesforge": "node --test scripts/salesforge.test.mts",
+    "salesforge:test-lead": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/salesforge-test-lead.mts",
     "docs:sitemap": "node scripts/sitemap-doc.mts",
     "qa:visual": "node scripts/visual-qa.mjs http://localhost:3000 --all"
   },
